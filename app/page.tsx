@@ -23,99 +23,104 @@ type Stall = {
   store: Store | null
 }
 
+type StallRow = {
+  id: string
+  row_num: number
+  col_num: number
+  floor: number
+  blocks: { name: string }[] | null
+}
+
+type StoreRow = {
+  stall_id: string | null
+  name: string
+  category: string
+  description: string
+  operating_hours: string
+  type: 'goods' | 'service'
+}
+
+async function loadStalls(floor: number): Promise<Stall[]> {
+  const { data: stallsData } = await supabase
+    .from('stalls')
+    .select('id, row_num, col_num, floor, blocks(name)')
+    .eq('floor', floor)
+
+  const { data: storesData } = await supabase
+    .from('stores')
+    .select('stall_id, name, category, description, operating_hours, type')
+    .eq('is_active', true)
+
+  const storesByStallId: Record<string, StoreRow> = {}
+  storesData?.forEach((store: StoreRow) => {
+    if (store.stall_id) storesByStallId[store.stall_id] = store
+  })
+
+  return (stallsData ?? []).map((s: StallRow) => ({
+    id: s.id,
+    row_num: s.row_num,
+    col_num: s.col_num,
+    floor: s.floor,
+    block: Array.isArray(s.blocks)
+      ? s.blocks[0]?.name?.replace('Block ', '') ?? 'A'
+      : (s.blocks as unknown as { name: string } | null)?.name?.replace('Block ', '') ?? 'A',
+    store: storesByStallId[s.id] ?? null,
+  }))
+}
+
 export default function Home() {
   const [stalls, setStalls] = useState<Stall[]>([])
   const [selectedStall, setSelectedStall] = useState<Stall | null>(null)
   const [currentFloor, setCurrentFloor] = useState(1)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<Stall[]>([])
-  const [isSearching, setIsSearching] = useState(false)
 
   useEffect(() => {
-    fetchStalls(currentFloor)
+    let cancelled = false
 
-    // Realtime WebSocket listener
+    async function init() {
+      setLoading(true)
+      setSelectedStall(null)
+      const data = await loadStalls(currentFloor)
+      if (cancelled) return
+      setStalls(data)
+      setLoading(false)
+    }
+
+    init()
+
     const channel = supabase
       .channel('market-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'stores' },
-        () => {
-          console.log('Store changed — refetching!')
-          fetchStalls(currentFloor)
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'stalls' },
-        () => {
-          console.log('Stall changed — refetching!')
-          fetchStalls(currentFloor)
-        }
-      )
-      .subscribe((status) => {
-        console.log('Realtime status:', status)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, async () => {
+        const data = await loadStalls(currentFloor)
+        if (!cancelled) setStalls(data)
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stalls' }, async () => {
+        const data = await loadStalls(currentFloor)
+        if (!cancelled) setStalls(data)
+      })
+      .subscribe()
 
-    // Cleanup pag nag-unmount o nag-switch ng floor
     return () => {
+      cancelled = true
       supabase.removeChannel(channel)
     }
   }, [currentFloor])
 
-  useEffect(() => {
-    if (search.trim() === '') {
-      setIsSearching(false)
-      setSearchResults([])
-      return
-    }
-    setIsSearching(true)
-    const query = search.toLowerCase()
-    const allStallsWithStores = stalls.filter(s => s.store !== null)
-    const results = allStallsWithStores.filter(s =>
-      s.store!.name.toLowerCase().includes(query) ||
-      s.store!.category.toLowerCase().includes(query) ||
-      s.store!.description.toLowerCase().includes(query)
-    )
-    setSearchResults(results)
-  }, [search, stalls])
-
-  async function fetchStalls(floor: number) {
-    setLoading(true)
-    setSelectedStall(null)
-
-    const { data: stallsData } = await supabase
-      .from('stalls')
-      .select('id, row_num, col_num, floor, blocks(name)')
-      .eq('floor', floor)
-
-    const { data: storesData } = await supabase
-      .from('stores')
-      .select('stall_id, name, category, description, operating_hours, type')
-      .eq('is_active', true)
-
-    const storesByStallId: Record<string, any> = {}
-    storesData?.forEach((store) => {
-      if (store.stall_id) storesByStallId[store.stall_id] = store
-    })
-
-    const formatted: Stall[] = (stallsData ?? []).map((s: any) => ({
-      id: s.id,
-      row_num: s.row_num,
-      col_num: s.col_num,
-      floor: s.floor,
-      block: s.blocks?.name?.replace('Block ', '') ?? 'A',
-      store: storesByStallId[s.id] ?? null,
-    }))
-
-    setStalls(formatted)
-    setLoading(false)
-  }
+  const query = search.toLowerCase().trim()
+  const isSearching = query !== ''
+  const searchResults = isSearching
+    ? stalls
+        .filter(s => s.store !== null)
+        .filter(s =>
+          s.store!.name.toLowerCase().includes(query) ||
+          s.store!.category.toLowerCase().includes(query) ||
+          s.store!.description.toLowerCase().includes(query)
+        )
+    : []
 
   function handleSelectSearchResult(stall: Stall) {
     setSearch('')
-    setIsSearching(false)
     setCurrentFloor(stall.floor)
     setSelectedStall(stall)
   }
@@ -124,7 +129,6 @@ export default function Home() {
     <main className="min-h-screen bg-gray-50">
       <div className="max-w-lg mx-auto px-4 py-6">
 
-        {/* Header */}
         <h1 className="text-xl font-medium text-gray-900 mb-1">
           Store Locator Map
         </h1>
@@ -132,7 +136,6 @@ export default function Home() {
           Find stores and services in the market
         </p>
 
-        {/* Search */}
         <div className="relative mb-4">
           <input
             type="text"
@@ -150,12 +153,11 @@ export default function Home() {
             </button>
           )}
 
-          {/* Search Results Dropdown */}
           {isSearching && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-sm z-10 overflow-hidden">
               {searchResults.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-4">
-                  No stores found for "{search}"
+                  No stores found for &quot;{search}&quot;
                 </p>
               ) : (
                 searchResults.map((stall) => (
@@ -177,13 +179,11 @@ export default function Home() {
           )}
         </div>
 
-        {/* Floor Switcher */}
         <FloorSwitcher
           currentFloor={currentFloor}
           onChange={setCurrentFloor}
         />
 
-        {/* Map */}
         {loading ? (
           <div className="text-sm text-gray-400 text-center py-12">
             Loading map...
@@ -196,7 +196,6 @@ export default function Home() {
           />
         )}
 
-        {/* Stall Details */}
         <StallPanel stall={selectedStall} />
 
       </div>

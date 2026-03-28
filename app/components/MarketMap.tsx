@@ -1,7 +1,5 @@
 'use client'
 
-import { useState } from 'react'
-
 const STALL_W = 82
 const STALL_H = 72
 const GAP = 6
@@ -43,13 +41,11 @@ export default function MarketMap({ stalls, onSelectStall, selectedStallId }: Pr
         xmlns="http://www.w3.org/2000/svg"
         className="w-full max-w-lg mx-auto block"
         >
-        {/* Pathways */}
         <rect x="190" y="0" width="40" height="420" fill="#D3D1C7" />
         <rect x="0" y="190" width="420" height="40" fill="#D3D1C7" />
         <rect x="190" y="190" width="40" height="40" fill="#B4B2A9" />
         <text x="210" y="214" textAnchor="middle" fontSize="12" fill="#888780">+</text>
 
-        {/* Block Labels */}
         {['A', 'B', 'C', 'D'].map((block) => (
             <text
             key={block}
@@ -64,9 +60,8 @@ export default function MarketMap({ stalls, onSelectStall, selectedStallId }: Pr
             </text>
         ))}
 
-        {/* Stalls */}
         {stalls.map((stall) => {
-            const origin = blockOrigins[stall.block]
+            const origin: { x: number; y: number } = blockOrigins[stall.block] ?? { x: 0, y: 0 }
             const x = origin.x + stall.col_num * (STALL_W + GAP)
             const y = origin.y + 14 + stall.row_num * (STALL_H + GAP)
             const isSelected = stall.id === selectedStallId

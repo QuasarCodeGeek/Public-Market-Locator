@@ -5,30 +5,36 @@ import { supabase } from '../lib/supabase'
 import Link from 'next/link'
 
 export default function Navbar() {
-    const [user, setUser] = useState<any>(null)
+    const [user, setUser] = useState<null | { id: string }>(null)
     const [role, setRole] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
     const [menuOpen, setMenuOpen] = useState(false)
 
     useEffect(() => {
-        fetchUser()
-    }, [])
+        let cancelled = false
 
-    async function fetchUser() {
-        const { data: { user } } = await supabase.auth.getUser()
-        setUser(user)
+        async function init() {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (cancelled) return
+            setUser(user)
 
-        if (user) {
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', user.id)
-            .single()
-        setRole(profile?.role ?? null)
+            if (user) {
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('role')
+                .eq('id', user.id)
+                .single()
+            if (cancelled) return
+            setRole(profile?.role ?? null)
+            }
+
+            if (cancelled) return
+            setLoading(false)
         }
 
-        setLoading(false)
-    }
+        init()
+        return () => { cancelled = true }
+    }, [])
 
     async function handleLogout() {
         await supabase.auth.signOut()
@@ -75,7 +81,7 @@ export default function Navbar() {
                 My Store
             </Link>
             <Link
-                href="/dashboard"
+                href="/"
                 onClick={() => setMenuOpen(false)}
                 className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
             >
@@ -96,17 +102,14 @@ export default function Navbar() {
         <nav className="sticky top-0 z-50 w-full bg-white border-b border-gray-200">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
 
-            {/* Logo */}
             <Link href="/" className="text-sm font-medium text-gray-900">
             🏪 Public Market
             </Link>
 
-            {/* Desktop nav */}
             <div className="hidden sm:flex items-center gap-3">
             {navLinks}
             </div>
 
-            {/* Hamburger button — mobile only */}
             <button
             onClick={() => setMenuOpen(!menuOpen)}
             className="sm:hidden flex flex-col gap-1.5 p-1"
@@ -118,7 +121,6 @@ export default function Navbar() {
 
         </div>
 
-        {/* Mobile dropdown menu */}
         {menuOpen && (
             <div className="sm:hidden border-t border-gray-100 bg-white px-4 py-4 flex flex-col gap-3">
             {navLinks}
