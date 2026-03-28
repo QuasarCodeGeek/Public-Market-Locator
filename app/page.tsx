@@ -1,65 +1,205 @@
-import Image from "next/image";
+'use client'
+
+import { useEffect, useState } from 'react'
+import { supabase } from './lib/supabase'
+import MarketMap from './components/MarketMap'
+import StallPanel from './components/StallPanel'
+import FloorSwitcher from './components/FloorSwitcher'
+
+type Store = {
+  name: string
+  category: string
+  description: string
+  operating_hours: string
+  type: 'goods' | 'service'
+}
+
+type Stall = {
+  id: string
+  block: string
+  row_num: number
+  col_num: number
+  floor: number
+  store: Store | null
+}
 
 export default function Home() {
+  const [stalls, setStalls] = useState<Stall[]>([])
+  const [selectedStall, setSelectedStall] = useState<Stall | null>(null)
+  const [currentFloor, setCurrentFloor] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [searchResults, setSearchResults] = useState<Stall[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+
+  useEffect(() => {
+    fetchStalls(currentFloor)
+
+    // Realtime WebSocket listener
+    const channel = supabase
+      .channel('market-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'stores' },
+        () => {
+          console.log('Store changed — refetching!')
+          fetchStalls(currentFloor)
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'stalls' },
+        () => {
+          console.log('Stall changed — refetching!')
+          fetchStalls(currentFloor)
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime status:', status)
+      })
+
+    // Cleanup pag nag-unmount o nag-switch ng floor
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [currentFloor])
+
+  useEffect(() => {
+    if (search.trim() === '') {
+      setIsSearching(false)
+      setSearchResults([])
+      return
+    }
+    setIsSearching(true)
+    const query = search.toLowerCase()
+    const allStallsWithStores = stalls.filter(s => s.store !== null)
+    const results = allStallsWithStores.filter(s =>
+      s.store!.name.toLowerCase().includes(query) ||
+      s.store!.category.toLowerCase().includes(query) ||
+      s.store!.description.toLowerCase().includes(query)
+    )
+    setSearchResults(results)
+  }, [search, stalls])
+
+  async function fetchStalls(floor: number) {
+    setLoading(true)
+    setSelectedStall(null)
+
+    const { data: stallsData } = await supabase
+      .from('stalls')
+      .select('id, row_num, col_num, floor, blocks(name)')
+      .eq('floor', floor)
+
+    const { data: storesData } = await supabase
+      .from('stores')
+      .select('stall_id, name, category, description, operating_hours, type')
+      .eq('is_active', true)
+
+    const storesByStallId: Record<string, any> = {}
+    storesData?.forEach((store) => {
+      if (store.stall_id) storesByStallId[store.stall_id] = store
+    })
+
+    const formatted: Stall[] = (stallsData ?? []).map((s: any) => ({
+      id: s.id,
+      row_num: s.row_num,
+      col_num: s.col_num,
+      floor: s.floor,
+      block: s.blocks?.name?.replace('Block ', '') ?? 'A',
+      store: storesByStallId[s.id] ?? null,
+    }))
+
+    setStalls(formatted)
+    setLoading(false)
+  }
+
+  function handleSelectSearchResult(stall: Stall) {
+    setSearch('')
+    setIsSearching(false)
+    setCurrentFloor(stall.floor)
+    setSelectedStall(stall)
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="min-h-screen bg-gray-50">
+      <div className="max-w-lg mx-auto px-4 py-6">
+
+        {/* Header */}
+        <h1 className="text-xl font-medium text-gray-900 mb-1">
+          Store Locator Map
+        </h1>
+        <p className="text-sm text-gray-500 mb-4">
+          Find stores and services in the market
+        </p>
+
+        {/* Search */}
+        <div className="relative mb-4">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search stores, categories..."
+            className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-blue-400 bg-white"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg"
+            >
+              ×
+            </button>
+          )}
+
+          {/* Search Results Dropdown */}
+          {isSearching && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-sm z-10 overflow-hidden">
+              {searchResults.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">
+                  No stores found for "{search}"
+                </p>
+              ) : (
+                searchResults.map((stall) => (
+                  <button
+                    key={stall.id}
+                    onClick={() => handleSelectSearchResult(stall)}
+                    className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-0 transition-colors"
+                  >
+                    <p className="text-sm font-medium text-gray-900">
+                      {stall.store!.name}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {stall.store!.category} · Block {stall.block} · Floor {stall.floor}
+                    </p>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Floor Switcher */}
+        <FloorSwitcher
+          currentFloor={currentFloor}
+          onChange={setCurrentFloor}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+
+        {/* Map */}
+        {loading ? (
+          <div className="text-sm text-gray-400 text-center py-12">
+            Loading map...
+          </div>
+        ) : (
+          <MarketMap
+            stalls={stalls}
+            onSelectStall={setSelectedStall}
+            selectedStallId={selectedStall?.id ?? null}
+          />
+        )}
+
+        {/* Stall Details */}
+        <StallPanel stall={selectedStall} />
+
+      </div>
+    </main>
+  )
 }
